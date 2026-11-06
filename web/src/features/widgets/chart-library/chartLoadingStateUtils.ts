@@ -1,5 +1,6 @@
 import { RESOURCE_LIMIT_ERROR_MESSAGE } from "@langfuse/shared";
 import { type QueryProgress } from "@/src/hooks/useSSEDashboardQuery";
+import { type Visualization } from "@/src/components/design-system/charts/internal/VisualizationFrame/VisualizationFrame";
 
 type ChartQueryState = {
   isPending: boolean;
@@ -37,10 +38,16 @@ export function getChartLoadingProgress({
   isPending: boolean;
   progress: QueryProgress | null;
   useBackendProgress: boolean;
-}): QueryProgress | null | undefined {
+}): Extract<Visualization, { type: "loading" }>["progress"] {
   if (!isPending || !useBackendProgress) {
-    return undefined;
+    return { type: "spinner" };
   }
 
-  return progress ?? null;
+  if (!progress) return { type: "indeterminate" };
+  return {
+    type: "determinate",
+    fraction: progress.percent,
+    read_rows: progress.read_rows,
+    total_rows_to_read: progress.total_rows_to_read,
+  };
 }

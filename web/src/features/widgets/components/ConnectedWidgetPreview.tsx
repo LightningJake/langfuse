@@ -1,4 +1,5 @@
 import { useMemo, type ComponentProps } from "react";
+import { type WidgetChartCard } from "./WidgetChartCard";
 import {
   Card,
   CardContent,
@@ -10,10 +11,24 @@ import { Alert } from "@/src/components/design-system/Alert/Alert";
 import { AlertCircle } from "@langfuse/icons";
 import { api } from "@/src/utils/api";
 import { getResultUnit } from "@langfuse/shared/query";
-import { Chart } from "@/src/features/widgets/chart-library/Chart";
+import { type FormatMetricOptions } from "../chart-library/chart-props";
+import { formatMetric } from "../chart-library/utils";
+import { useLineChartTimeSeries } from "../chart-library/useLineChartTimeSeries";
+import { useAreaChartTimeSeries } from "../chart-library/useAreaChartTimeSeries";
+import { useVerticalBarChartTimeSeries } from "../chart-library/useVerticalBarChartTimeSeries";
+import { useTopListChart } from "../chart-library/useTopListChart";
+import { useVerticalBarChart } from "../chart-library/useVerticalBarChart";
+import { usePieChart } from "../chart-library/usePieChart";
+import { useHistogramChart } from "../chart-library/useHistogramChart";
+import { usePivotTable } from "../chart-library/usePivotTable";
+import { VisualizationFrame } from "@/src/components/design-system/charts/internal/VisualizationFrame/VisualizationFrame";
+import {
+  useLargeDatasetGuard,
+  LARGE_DATASET_CONFIRMATION,
+} from "@/src/features/widgets/chart-library/useLargeDatasetGuard";
+import { isChartDataEmpty } from "@/src/features/widgets/chart-library/isChartDataEmpty";
 import { type DataPoint } from "@/src/features/widgets/chart-library/chart-props";
 import { isTimeSeriesChart } from "@/src/features/widgets/chart-library/utils";
-import { ChartLoadingState } from "@/src/features/widgets/chart-library/ChartLoadingState";
 import {
   getChartLoadingProgress,
   getChartLoadingStateProps,
@@ -67,7 +82,21 @@ export function ConnectedWidgetPreview(props: ConnectedWidgetPreviewProps) {
     chartPresentation,
   } = useWidgetPreviewData(props);
 
-  const chartConfig: ComponentProps<typeof Chart>["chartConfig"] = (() => {
+  const { shouldWarn, proceed } = useLargeDatasetGuard(
+    transformedData.length,
+    false,
+  );
+  const showEmpty =
+    (isTimeSeriesChart(chartType) ||
+      chartType === "NUMBER" ||
+      chartType === "HISTOGRAM" ||
+      chartType === "PIVOT_TABLE") &&
+    (chartType === "NUMBER" || !queryResult.isPending) &&
+    isChartDataEmpty(transformedData);
+
+  const chartConfig: NonNullable<
+    ComponentProps<typeof WidgetChartCard>["chartConfig"]
+  > = (() => {
     if (chartType === "PIVOT_TABLE") {
       return {
         type: chartType,
@@ -111,6 +140,118 @@ export function ConnectedWidgetPreview(props: ConnectedWidgetPreviewProps) {
     };
   })();
 
+  const metricFormatter = useMemo(
+    () =>
+      chartPresentation?.metricFormatter ??
+      ((value: number, options: FormatMetricOptions) =>
+        formatMetric(value, { ...options, unit: chartConfig.unit })),
+    [chartPresentation?.metricFormatter, chartConfig.unit],
+  );
+  const config = useMemo(() => {
+    if (!chartPresentation) return undefined;
+    return {
+      metric: {
+        label: chartPresentation.label,
+        theme: { light: "hsl(var(--chart-1))", dark: "hsl(var(--chart-1))" },
+      },
+    };
+  }, [chartPresentation]);
+  const active =
+    queryValidation.valid &&
+    Boolean(queryResult.data || chartLoadingState.isLoading) &&
+    !shouldWarn &&
+    !showEmpty;
+  const common = {
+    config,
+    metricFormatter,
+    missingValue: getWidgetMissingBucketValue(selectedAggregation),
+  };
+  const preparedCharts = {
+    LINE_TIME_SERIES: useLineChartTimeSeries({
+      ...common,
+      data: active && chartType === "LINE_TIME_SERIES" ? transformedData : [],
+      showDataPointDots: chartConfig.show_data_point_dots ?? false,
+    }),
+    AREA_TIME_SERIES: useAreaChartTimeSeries({
+      ...common,
+      data: active && chartType === "AREA_TIME_SERIES" ? transformedData : [],
+    }),
+    BAR_TIME_SERIES: useVerticalBarChartTimeSeries({
+      ...common,
+      data: active && chartType === "BAR_TIME_SERIES" ? transformedData : [],
+    }),
+    HORIZONTAL_BAR: useTopListChart({
+      ...common,
+      data:
+        active && chartType === "HORIZONTAL_BAR"
+          ? transformedData.slice(0, values.chart.rowLimit)
+          : [],
+    }),
+    VERTICAL_BAR: useVerticalBarChart({
+      ...common,
+      data:
+        active && chartType === "VERTICAL_BAR"
+          ? transformedData.slice(0, values.chart.rowLimit)
+          : [],
+    }),
+    PIE: usePieChart({
+      metricFormatter,
+      data:
+        active && chartType === "PIE"
+          ? transformedData.slice(0, values.chart.rowLimit)
+          : [],
+    }),
+    HISTOGRAM: useHistogramChart({
+      ...common,
+      data: active && chartType === "HISTOGRAM" ? transformedData : [],
+    }),
+    PIVOT_TABLE: usePivotTable({
+      data: active && chartType === "PIVOT_TABLE" ? transformedData : [],
+      config: {
+        dimensions: chartConfig.dimensions ?? [],
+        metrics: chartConfig.metrics ?? ["metric"],
+        units: chartConfig.units,
+        rowLimit: chartConfig.row_limit ?? values.chart.rowLimit,
+        defaultSort: chartConfig.defaultSort,
+      },
+      sortState: chartType === "PIVOT_TABLE" ? previewSortState : undefined,
+    }),
+    NUMBER: {
+      visualization: {
+        type: "number" as const,
+        value: transformedData.reduce(
+          (sum, point) =>
+            sum + (typeof point.metric === "number" ? point.metric : 0),
+          0,
+        ),
+        valueFormatter: metricFormatter,
+      },
+    },
+  };
+  const prepared = preparedCharts[chartType];
+  const content = (() => {
+    const { visualization } = prepared;
+    if (visualization.type === "table" && !visualization.rows.length) {
+      if (queryResult.isPending)
+        return <div className="h-full" aria-hidden="true" />;
+      return (
+        <div
+          className="text-muted-foreground flex h-full items-center justify-center text-sm"
+          role="alert"
+        >
+          Unable to process data for pivot table
+        </div>
+      );
+    }
+    if (visualization.type === "histogram" && !visualization.data.length)
+      return (
+        <div className="text-muted-foreground flex h-full items-center justify-center">
+          No data available
+        </div>
+      );
+    return <VisualizationFrame content={prepared.visualization} />;
+  })();
+
   return (
     <div className="w-2/3">
       <Card className="flex aspect-video flex-col">
@@ -140,34 +281,45 @@ export function ConnectedWidgetPreview(props: ConnectedWidgetPreviewProps) {
           (queryResult.data || chartLoadingState.isLoading) && (
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="relative min-h-0 flex-1">
-                <Chart
-                  chartType={chartType}
-                  data={transformedData}
-                  config={
-                    chartPresentation
-                      ? { metric: { label: chartPresentation.label } }
-                      : undefined
-                  }
-                  rowLimit={values.chart.rowLimit}
-                  chartConfig={chartConfig}
-                  sortState={
-                    chartType === "PIVOT_TABLE" ? previewSortState : undefined
-                  }
-                  onSortChange={undefined}
-                  isLoading={queryResult.isPending}
-                  metricFormatter={chartPresentation?.metricFormatter}
-                  missingValue={getWidgetMissingBucketValue(
-                    selectedAggregation,
-                  )}
-                />
-                {chartLoadingState.isLoading && (
-                  <ChartLoadingState
-                    showSpinner={chartLoadingState.showSpinner}
-                    showHintImmediately={chartLoadingState.showHintImmediately}
-                    hintText={chartLoadingState.hintText}
-                    progress={loadingProgress}
-                    className="bg-background/80 absolute inset-0 z-20 backdrop-blur-xs"
+                {shouldWarn && (
+                  <VisualizationFrame
+                    content={{
+                      ...LARGE_DATASET_CONFIRMATION,
+                      onConfirm: proceed,
+                    }}
                   />
+                )}
+                {!shouldWarn && showEmpty && (
+                  <VisualizationFrame
+                    content={
+                      queryResult.isPending
+                        ? { type: "loading", progress: { type: "spinner" } }
+                        : { type: "empty" }
+                    }
+                  />
+                )}
+                {!shouldWarn && !showEmpty && content}
+                {chartLoadingState.isLoading && (
+                  <div className="bg-background/80 absolute inset-0 z-20 backdrop-blur-xs">
+                    <VisualizationFrame
+                      content={
+                        chartLoadingState.showSpinner
+                          ? {
+                              type: "loading",
+                              showHintImmediately:
+                                chartLoadingState.showHintImmediately,
+                              hintText: chartLoadingState.hintText,
+                              progress: loadingProgress,
+                            }
+                          : {
+                              type: "error",
+                              message:
+                                chartLoadingState.hintText ??
+                                "Unable to load chart data",
+                            }
+                      }
+                    />
+                  </div>
                 )}
               </div>
             </div>

@@ -16,15 +16,15 @@ import {
   type views,
 } from "@langfuse/shared/query";
 import { type z } from "zod";
-import { Chart } from "@/src/features/widgets/chart-library/Chart";
-import { type ChartProps } from "@/src/features/widgets/chart-library/chart-props";
+import {
+  type ChartProps,
+  type DataPoint,
+} from "@/src/features/widgets/chart-library/chart-props";
 import { type FilterState, type OrderByState } from "@langfuse/shared";
 import { isTimeSeriesChart } from "@/src/features/widgets/chart-library/utils";
 import {
   PencilIcon,
   TrashIcon,
-  GripVerticalIcon,
-  MoreVerticalIcon,
   CopyIcon,
   CopyPlusIcon,
   FileJsonIcon,
@@ -45,7 +45,6 @@ import {
 } from "@/src/features/widgets/utils/import-export-utils";
 import { copyTextToClipboard } from "@/src/utils/clipboard";
 import { useCaptureWidgetHighCardinalityError } from "@/src/features/widgets/hooks/useWidgetQueryErrorCapture";
-import { DropdownMenu } from "@/src/components/design-system/DropdownMenu/DropdownMenu";
 import {
   formatMetricName,
   mergeWidgetAndDashboardFilters,
@@ -54,7 +53,6 @@ import {
   getWidgetMetricPresentation,
   getWidgetMissingBucketValue,
 } from "@/src/features/widgets/utils";
-import { ChartLoadingState } from "@/src/features/widgets/chart-library/ChartLoadingState";
 import {
   getChartLoadingProgress,
   getChartLoadingStateProps,
@@ -63,7 +61,7 @@ import type { ResolvedReadPath } from "@/src/features/events/hooks/useReadPath";
 import { useScheduledDashboardExecuteQuery } from "@/src/features/dashboard/hooks/DashboardQuerySchedulerProvider";
 import { CopyWidgetDialog } from "@/src/features/widgets/components/CopyWidgetDialog";
 import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
-import { Badge } from "@/src/components/design-system/Badge/Badge";
+import { WidgetChartCard } from "./WidgetChartCard";
 
 export interface WidgetPlacement {
   id: string;
@@ -312,11 +310,15 @@ export function DashboardWidget({
     setRetryCount((current) => current + 1);
   }, []);
 
-  const transformedData = useMemo(() => {
+  const transformedData = useMemo<DataPoint[]>(() => {
     if (!widget.data || !queryResult.data) {
       return [];
     }
-    return queryResult.data.map((item: any) => {
+    return queryResult.data.map((item) => {
+      const timeDimension =
+        typeof item.time_dimension === "string"
+          ? item.time_dimension
+          : undefined;
       if (widget.data.chartType === "PIVOT_TABLE") {
         // For pivot tables, preserve all raw data fields without any transformation
         // The PivotTable component will extract the appropriate metric fields
@@ -327,7 +329,7 @@ export function DashboardWidget({
               ? (widget.data.dimensions[0]?.field ?? "dimension")
               : "dimension", // Fallback for compatibility
           metric: 0, // Placeholder - not used for pivot tables
-          time_dimension: item["time_dimension"],
+          time_dimension: timeDimension,
           // Include all original query fields for pivot table processing
           ...item,
         };
@@ -366,7 +368,7 @@ export function DashboardWidget({
         return {
           dimension: undefined,
           metric: null,
-          time_dimension: item["time_dimension"],
+          time_dimension: timeDimension,
         };
       }
 
@@ -385,13 +387,15 @@ export function DashboardWidget({
               })()
             : formatMetricName(metricField),
         metric: Array.isArray(metricValue)
-          ? metricValue
+          ? metricValue.map((bin: unknown) =>
+              Array.isArray(bin) ? bin.map(Number) : [],
+            )
           : // On a time series a missing value stays null — the chart renders
             // it by the metric's missing-bucket semantics instead of a fake 0.
             isTimeSeries && metricValue == null
             ? null
             : Number(metricValue || 0),
-        time_dimension: item["time_dimension"],
+        time_dimension: timeDimension,
       };
     });
   }, [queryResult.data, widget.data]);
@@ -554,17 +558,22 @@ export function DashboardWidget({
 
   if (widget.isPending) {
     return (
-      <div className="bg-background flex items-center justify-center rounded-lg border p-4">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
+      <WidgetChartCard
+        title="Loading widget"
+        content={{ type: "loading", progress: { type: "spinner" } }}
+      />
     );
   }
 
   if (!widget.data) {
     return (
-      <div className="bg-background flex items-center justify-center rounded-lg border p-4">
-        <div className="text-muted-foreground">Widget not found</div>
-      </div>
+      <WidgetChartCard
+        title="Widget unavailable"
+        content={{
+          type: "error",
+          message: widget.error?.message ?? "Widget not found",
+        }}
+      />
     );
   }
 
@@ -620,7 +629,7 @@ export function DashboardWidget({
   };
 
   return (
-    <div className="bg-background group flex h-full w-full flex-col overflow-hidden rounded-lg border p-4">
+    <>
       {isCopyDialogOpen && (
         <CopyWidgetDialog
           open={isCopyDialogOpen}
@@ -630,216 +639,167 @@ export function DashboardWidget({
           isPending={copyMutation.isPending}
         />
       )}
-      <div className="flex items-center justify-between">
-        <span
-          className="flex min-w-0 items-center gap-1.5 truncate text-base font-bold"
-          title={widget.data.name}
-        >
-          <span className="truncate" title={widget.data.name}>
-            {widget.data.name}
-          </span>
-          {dashboardOwner === "PROJECT" && widget.data.owner === "LANGFUSE" && (
-            <Badge
-              color="filled"
-              text="Langfuse"
-              title="Maintained by Langfuse — editing creates your own copy"
-            />
-          )}
-        </span>
-        <div className="flex space-x-2">
-          {!readOnly && (hasCUDAccess || isLockedEditable) && (
-            <>
-              <GripVerticalIcon
-                size="base"
-                __rawClassName="drag-handle text-muted-foreground hover:text-foreground hidden cursor-grab active:cursor-grabbing lg:group-hover:block"
-              />
-              {isLockedEditable ? (
-                <button
-                  onClick={onLockedEditAttempt}
-                  className="text-muted-foreground hover:text-foreground hidden group-hover:block"
-                  aria-label="Edit widget"
-                >
-                  <PencilIcon size="base" />
-                </button>
-              ) : widget.data.owner === "PROJECT" ? (
-                <button
-                  onClick={handleEdit}
-                  className="text-muted-foreground hover:text-foreground hidden group-hover:block"
-                  aria-label="Edit widget"
-                >
-                  <PencilIcon size="base" />
-                </button>
-              ) : widget.data.owner === "LANGFUSE" ? (
-                <button
-                  onClick={() => {
-                    capture("dashboard:widget_copy_first_open", {
-                      widget_id: placement.widgetId,
-                      dashboard_id: dashboardId,
-                    });
-                    setIsCopyDialogOpen(true);
-                  }}
-                  className="text-muted-foreground hover:text-foreground hidden group-hover:block"
-                  aria-label="Edit widget"
-                >
-                  <PencilIcon size="base" />
-                </button>
-              ) : null}
-            </>
-          )}
-          <DropdownMenu
-            placement="bottom-end"
-            items={[
-              ...(tableView
-                ? [
-                    {
-                      type: "item" as const,
-                      id: "view-as-table",
-                      title: viewAsTableHint
-                        ? `View as table (${viewAsTableHint.count} filter${viewAsTableHint.count === 1 ? "" : "s"} not shown in the table)`
-                        : "View as table",
-                      tooltip: viewAsTableHint?.title,
-                      icon: TableIcon,
-                      onClick: handleViewAsTable,
-                    },
-                    {
-                      id: "table-separator",
-                      type: "separator" as const,
-                    },
-                  ]
-                : []),
-              {
-                type: "item",
-                id: "copy",
-                title: "Copy widget",
-                icon: CopyIcon,
-                onClick: handleCopyToClipboard,
-              },
-              ...(onDuplicateWidget
-                ? [
-                    {
-                      type: "item" as const,
-                      id: "clone",
-                      title: "Clone",
-                      icon: CopyPlusIcon,
-                      onClick: () =>
-                        onDuplicateWidget(placement, widgetExportSource),
-                    },
-                  ]
-                : []),
-              { id: "download-separator", type: "separator" },
-              {
-                type: "item",
-                id: "download-json",
-                title: "Download as JSON",
-                icon: FileJsonIcon,
-                onClick: handleDownloadJson,
-              },
-              {
-                type: "item",
-                id: "download-csv",
-                title: "Download data as CSV",
-                icon: DownloadIcon,
-                disabled: queryResult.isPending
-                  ? { reason: "Chart data is still loading" }
-                  : undefined,
-                onClick: () =>
-                  downloadChartDataCsv(transformedData, widget.data.name),
-              },
-              ...(!readOnly && (hasCUDAccess || isLockedEditable)
-                ? [
-                    {
-                      id: "delete-separator",
-                      type: "separator" as const,
-                    },
-                    {
-                      type: "item" as const,
-                      id: "delete",
-                      title: "Delete",
-                      icon: TrashIcon,
-                      variant: "destructive" as const,
-                      onClick: handleDelete,
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            {({ getTriggerProps }) => (
-              <button
-                className="text-muted-foreground hover:text-foreground hidden group-hover:block aria-expanded:block"
-                aria-label="Widget actions"
-                {...getTriggerProps()}
-              >
-                <MoreVerticalIcon size="base" />
-              </button>
-            )}
-          </DropdownMenu>
-        </div>
-      </div>
-      <div
-        className="text-muted-foreground mb-4 truncate text-sm"
-        title={widget.data.description}
-      >
-        {widget.data.description}
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col">
-        {!queryValidation.valid ? (
-          <div className="relative min-h-0 flex-1">
-            <ChartLoadingState
-              showSpinner={false}
-              showHintImmediately={true}
-              hintText={queryValidation.reason}
-              layout={loadingStateLayout}
-              className="bg-background/80 absolute inset-0 z-20 backdrop-blur-xs"
-            />
-          </div>
-        ) : (
-          <div className="relative min-h-0 flex-1">
-            <div className="absolute inset-0">
-              <Chart
-                chartType={widget.data.chartType}
-                data={transformedData}
-                syncId={dashboardId}
-                sync={chartSync}
-                config={chartMetricConfig}
-                rowLimit={
-                  widget.data.chartConfig.type === "LINE_TIME_SERIES" ||
-                  widget.data.chartConfig.type === "BAR_TIME_SERIES" ||
-                  widget.data.chartConfig.type === "AREA_TIME_SERIES"
-                    ? 100
-                    : (widget.data.chartConfig.row_limit ?? 100)
+      <WidgetChartCard
+        chartType={widget.data.chartType}
+        title={widget.data.name}
+        description={widget.data.description}
+        badge={
+          dashboardOwner === "PROJECT" && widget.data.owner === "LANGFUSE"
+            ? {
+                text: "Langfuse",
+                description:
+                  "Maintained by Langfuse — editing creates your own copy",
+              }
+            : undefined
+        }
+        content={
+          !queryValidation.valid
+            ? {
+                type: "error",
+                message: queryValidation.reason,
+                layout: loadingStateLayout,
+              }
+            : queryResult.isError
+              ? {
+                  type: "error",
+                  layout: loadingStateLayout,
+                  message: chartLoadingState.hintText ?? "Query failed",
+                  onRetry: handleRetry,
                 }
-                chartConfig={chartConfigForRender}
-                sortState={
-                  widget.data.chartType === "PIVOT_TABLE"
-                    ? sortState
-                    : undefined
-                }
-                onSortChange={
-                  widget.data.chartType === "PIVOT_TABLE"
-                    ? updateSort
-                    : undefined
-                }
-                isLoading={queryResult.isPending}
-                metricFormatter={chartPresentation?.metricFormatter}
-                missingValue={getWidgetMissingBucketValue(
-                  widget.data.metrics[0]?.agg ?? "count",
-                )}
-              />
-            </div>
-            {chartLoadingState.isLoading && (
-              <ChartLoadingState
-                showSpinner={chartLoadingState.showSpinner}
-                showHintImmediately={chartLoadingState.showHintImmediately}
-                hintText={chartLoadingState.hintText}
-                onRetry={queryResult.isError ? handleRetry : undefined}
-                progress={loadingProgress}
-                layout={loadingStateLayout}
-                className="bg-background/80 absolute inset-0 z-20 backdrop-blur-xs"
-              />
-            )}
-          </div>
+              : queryResult.isPending
+                ? {
+                    type: "loading",
+                    layout: loadingStateLayout,
+                    progress: loadingProgress,
+                    hintText: chartLoadingState.hintText,
+                  }
+                : undefined
+        }
+        actions={{
+          draggable: !readOnly && (hasCUDAccess || isLockedEditable),
+          buttons:
+            !readOnly && (hasCUDAccess || isLockedEditable)
+              ? [
+                  {
+                    id: "edit",
+                    label: "Edit widget",
+                    icon: PencilIcon,
+                    onClick: () => {
+                      if (isLockedEditable) {
+                        onLockedEditAttempt?.();
+                        return;
+                      }
+                      if (widget.data.owner === "PROJECT") {
+                        handleEdit();
+                        return;
+                      }
+                      capture("dashboard:widget_copy_first_open", {
+                        widget_id: placement.widgetId,
+                        dashboard_id: dashboardId,
+                      });
+                      setIsCopyDialogOpen(true);
+                    },
+                  },
+                ]
+              : [],
+          menu: [
+            ...(tableView
+              ? [
+                  {
+                    type: "item" as const,
+                    id: "view-as-table",
+                    title: viewAsTableHint
+                      ? `View as table (${viewAsTableHint.count} filter${viewAsTableHint.count === 1 ? "" : "s"} not shown in the table)`
+                      : "View as table",
+                    tooltip: viewAsTableHint?.title,
+                    icon: TableIcon,
+                    onClick: handleViewAsTable,
+                  },
+                  {
+                    id: "table-separator",
+                    type: "separator" as const,
+                  },
+                ]
+              : []),
+            {
+              type: "item",
+              id: "copy",
+              title: "Copy widget",
+              icon: CopyIcon,
+              onClick: handleCopyToClipboard,
+            },
+            ...(onDuplicateWidget
+              ? [
+                  {
+                    type: "item" as const,
+                    id: "clone",
+                    title: "Clone",
+                    icon: CopyPlusIcon,
+                    onClick: () =>
+                      onDuplicateWidget(placement, widgetExportSource),
+                  },
+                ]
+              : []),
+            { id: "download-separator", type: "separator" },
+            {
+              type: "item",
+              id: "download-json",
+              title: "Download as JSON",
+              icon: FileJsonIcon,
+              onClick: handleDownloadJson,
+            },
+            {
+              type: "item",
+              id: "download-csv",
+              title: "Download data as CSV",
+              icon: DownloadIcon,
+              disabled: queryResult.isPending
+                ? { reason: "Chart data is still loading" }
+                : undefined,
+              onClick: () =>
+                downloadChartDataCsv(transformedData, widget.data.name),
+            },
+            ...(!readOnly && (hasCUDAccess || isLockedEditable)
+              ? [
+                  {
+                    id: "delete-separator",
+                    type: "separator" as const,
+                  },
+                  {
+                    type: "item" as const,
+                    id: "delete",
+                    title: "Delete",
+                    icon: TrashIcon,
+                    variant: "destructive" as const,
+                    onClick: handleDelete,
+                  },
+                ]
+              : []),
+          ],
+        }}
+        data={transformedData}
+        syncId={dashboardId}
+        sync={chartSync}
+        config={chartMetricConfig}
+        rowLimit={
+          widget.data.chartConfig.type === "LINE_TIME_SERIES" ||
+          widget.data.chartConfig.type === "BAR_TIME_SERIES" ||
+          widget.data.chartConfig.type === "AREA_TIME_SERIES"
+            ? 100
+            : (widget.data.chartConfig.row_limit ?? 100)
+        }
+        chartConfig={chartConfigForRender}
+        sortState={
+          widget.data.chartType === "PIVOT_TABLE" ? sortState : undefined
+        }
+        onSortChange={
+          widget.data.chartType === "PIVOT_TABLE" ? updateSort : undefined
+        }
+        metricFormatter={chartPresentation?.metricFormatter}
+        missingValue={getWidgetMissingBucketValue(
+          widget.data.metrics[0]?.agg ?? "count",
         )}
-      </div>
-    </div>
+      />
+    </>
   );
 }

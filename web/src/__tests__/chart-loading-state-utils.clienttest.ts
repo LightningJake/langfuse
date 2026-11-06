@@ -56,7 +56,7 @@ describe("getChartLoadingStateProps", () => {
         progress: null,
         useBackendProgress: false,
       }),
-    ).toBeUndefined();
+    ).toEqual({ type: "spinner" });
   });
 
   test("keeps the loading bar visible while waiting for streamed progress", () => {
@@ -66,6 +66,43 @@ describe("getChartLoadingStateProps", () => {
         progress: null,
         useBackendProgress: true,
       }),
-    ).toBeNull();
+    ).toEqual({ type: "indeterminate" });
+  });
+
+  test("adapts backend progress to determinate visualization progress", () => {
+    expect(
+      getChartLoadingProgress({
+        isPending: true,
+        useBackendProgress: true,
+        progress: {
+          percent: 0.5,
+          read_rows: 50,
+          total_rows_to_read: 100,
+          elapsed_ns: 0,
+          read_bytes: 0,
+        },
+      }),
+    ).toEqual({
+      type: "determinate",
+      fraction: 0.5,
+      read_rows: 50,
+      total_rows_to_read: 100,
+    });
+  });
+
+  test("hides progress after a query completes", () => {
+    expect(
+      getChartLoadingProgress({
+        isPending: false,
+        useBackendProgress: true,
+        progress: {
+          percent: 1,
+          read_rows: 100,
+          total_rows_to_read: 100,
+          elapsed_ns: 0,
+          read_bytes: 0,
+        },
+      }),
+    ).toEqual({ type: "spinner" });
   });
 });

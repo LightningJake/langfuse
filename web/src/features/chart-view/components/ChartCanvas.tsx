@@ -1,8 +1,23 @@
 import React, { useMemo } from "react";
 import { BarChart3 } from "@langfuse/icons";
 import { type DashboardWidgetChartType } from "@langfuse/shared/src/db";
-import { Chart } from "@/src/features/widgets/chart-library/Chart";
+import { useLineChartTimeSeries } from "@/src/features/widgets/chart-library/useLineChartTimeSeries";
+import { useAreaChartTimeSeries } from "@/src/features/widgets/chart-library/useAreaChartTimeSeries";
+import { useVerticalBarChartTimeSeries } from "@/src/features/widgets/chart-library/useVerticalBarChartTimeSeries";
+import { useTopListChart } from "@/src/features/widgets/chart-library/useTopListChart";
+import { useVerticalBarChart } from "@/src/features/widgets/chart-library/useVerticalBarChart";
+import { usePieChart } from "@/src/features/widgets/chart-library/usePieChart";
+import { useHistogramChart } from "@/src/features/widgets/chart-library/useHistogramChart";
+import { usePivotTable } from "@/src/features/widgets/chart-library/usePivotTable";
+import { formatMetric } from "@/src/features/widgets/chart-library/utils";
+import { VisualizationFrame } from "@/src/components/design-system/charts/internal/VisualizationFrame/VisualizationFrame";
+import {
+  useLargeDatasetGuard,
+  LARGE_DATASET_CONFIRMATION,
+} from "@/src/features/widgets/chart-library/useLargeDatasetGuard";
+import { isChartDataEmpty } from "@/src/features/widgets/chart-library/isChartDataEmpty";
 import type {
+  FormatMetricOptions,
   DataPoint,
   ChartProps,
 } from "@/src/features/widgets/chart-library/chart-props";
@@ -23,12 +38,19 @@ function buildChartConfig(data: DataPoint[], metricLabel: string) {
   // (e.g. an observation/model named "metric") keeps its own label.
   for (const point of data) {
     if (point.dimension && config[point.dimension] === undefined) {
-      config[point.dimension] = { label: point.dimension };
+      config[point.dimension] = {
+        label: point.dimension,
+        theme: { light: "hsl(var(--chart-1))", dark: "hsl(var(--chart-1))" },
+      };
     }
   }
   // Reserved key the bar/pie primitives colour through `--color-metric`; only
   // add it if no real series already claimed the "metric" key above.
-  if (config.metric === undefined) config.metric = { label: metricLabel };
+  if (config.metric === undefined)
+    config.metric = {
+      label: metricLabel,
+      theme: { light: "hsl(var(--chart-1))", dark: "hsl(var(--chart-1))" },
+    };
   return config;
 }
 
@@ -68,8 +90,90 @@ export const ChartCanvas = React.memo(function ChartCanvas({
     () => buildChartConfig(data, metricLabel),
     [data, metricLabel],
   );
+  const { shouldWarn, proceed } = useLargeDatasetGuard(data.length, false);
 
-  if (data.length === 0) {
+  const metricFormatter = useMemo(
+    () => (value: number, options: FormatMetricOptions) =>
+      formatMetric(value, { ...options, unit: metricUnit }),
+    [metricUnit],
+  );
+  const active = !shouldWarn && !isChartDataEmpty(data);
+  // Match dashboard widgets: only additive metrics fill missing buckets with zero.
+  const common = {
+    config: chartConfig,
+    metricFormatter,
+    legendPosition:
+      isTimeSeriesChartType(chartType) && breakdown !== "none"
+        ? ("below" as const)
+        : ("none" as const),
+    missingValue: getWidgetMissingBucketValue(aggregation),
+  };
+  const preparedCharts = {
+    LINE_TIME_SERIES: useLineChartTimeSeries({
+      ...common,
+      data: active && chartType === "LINE_TIME_SERIES" ? data : [],
+    }),
+    AREA_TIME_SERIES: useAreaChartTimeSeries({
+      ...common,
+      data: active && chartType === "AREA_TIME_SERIES" ? data : [],
+    }),
+    BAR_TIME_SERIES: useVerticalBarChartTimeSeries({
+      ...common,
+      data: active && chartType === "BAR_TIME_SERIES" ? data : [],
+    }),
+    HORIZONTAL_BAR: useTopListChart({
+      ...common,
+      data:
+        active && chartType === "HORIZONTAL_BAR"
+          ? data.slice(0, RANKED_ROW_LIMIT)
+          : [],
+    }),
+    VERTICAL_BAR: useVerticalBarChart({
+      ...common,
+      data:
+        active && chartType === "VERTICAL_BAR"
+          ? data.slice(0, RANKED_ROW_LIMIT)
+          : [],
+    }),
+    PIE: usePieChart({
+      metricFormatter,
+      data:
+        active && chartType === "PIE" ? data.slice(0, RANKED_ROW_LIMIT) : [],
+    }),
+    HISTOGRAM: useHistogramChart({
+      ...common,
+      data: active && chartType === "HISTOGRAM" ? data : [],
+    }),
+    PIVOT_TABLE: usePivotTable({
+      data: active && chartType === "PIVOT_TABLE" ? data : [],
+      config: {
+        dimensions: [],
+        metrics: ["metric"],
+        rowLimit: RANKED_ROW_LIMIT,
+      },
+    }),
+    NUMBER: {
+      visualization: {
+        type: "number" as const,
+        value: data.reduce(
+          (sum, point) =>
+            sum + (typeof point.metric === "number" ? point.metric : 0),
+          0,
+        ),
+        valueFormatter: metricFormatter,
+      },
+    },
+  };
+  const prepared = preparedCharts[chartType];
+
+  if (shouldWarn)
+    return (
+      <VisualizationFrame
+        content={{ ...LARGE_DATASET_CONFIRMATION, onConfirm: proceed }}
+      />
+    );
+
+  if (isChartDataEmpty(data)) {
     return (
       <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
         <BarChart3 __rawClassName="h-10 w-10 opacity-40" />
@@ -78,25 +182,19 @@ export const ChartCanvas = React.memo(function ChartCanvas({
     );
   }
 
-  // Show the series legend only for a multi-series time chart. The shared
-  // chart-library renders the legend below the plot now (LFE-10576), so "below"
-  // is the value that used to be "above" here.
-  const isTimeSeries = isTimeSeriesChartType(chartType);
-  const legendPosition =
-    isTimeSeries && breakdown !== "none" ? "below" : "none";
-
-  return (
-    <Chart
-      chartType={chartType}
-      data={data}
-      rowLimit={RANKED_ROW_LIMIT}
-      chartConfig={{ type: chartType, unit: metricUnit }}
-      config={chartConfig}
-      legendPosition={legendPosition}
-      // Match dashboard widgets: additive metrics (count/sum) fill an empty
-      // bucket with a 0 (continuous line), non-additive ones leave a gap — so a
-      // chart renders the same here as once saved to a dashboard.
-      missingValue={getWidgetMissingBucketValue(aggregation)}
-    />
-  );
+  const { visualization } = prepared;
+  if (visualization.type === "table" && !visualization.rows.length) {
+    return (
+      <div
+        className="text-muted-foreground flex h-full items-center justify-center text-sm"
+        role="alert"
+      >
+        Unable to process data for pivot table
+      </div>
+    );
+  }
+  if (visualization.type === "histogram" && !visualization.data.length) {
+    return <VisualizationFrame content={{ type: "empty" }} />;
+  }
+  return <VisualizationFrame content={prepared.visualization} />;
 });

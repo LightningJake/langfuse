@@ -1,6 +1,5 @@
 /* eslint-disable @repo/no-style-props, @repo/component-file-structure */
 import { useState } from "react";
-import { HoverCard } from "@/src/components/design-system/HoverCard/HoverCard";
 import { ControlledHoverCard } from "@/src/components/design-system/ControlledHoverCard/ControlledHoverCard";
 import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
 import { cn } from "@/src/utils/tailwind";
@@ -88,35 +87,5 @@ export default function DocPopup({
         </button>
       )}
     </ControlledHoverCard>
-  );
-}
-
-export type PopupProps = {
-  triggerContent: React.ReactNode;
-  description: React.ReactNode;
-};
-
-export function Popup({ triggerContent, description }: PopupProps) {
-  return (
-    <HoverCard
-      openDelay={200}
-      content={
-        <div className="w-64 p-3">
-          <div className="text-primary text-xs font-normal whitespace-break-spaces sm:pl-0">
-            {description}
-          </div>
-        </div>
-      }
-    >
-      {({ getTriggerProps }) => (
-        <div
-          className="mx-1 cursor-pointer"
-          tabIndex={0}
-          {...getTriggerProps()}
-        >
-          {triggerContent}
-        </div>
-      )}
-    </HoverCard>
   );
 }

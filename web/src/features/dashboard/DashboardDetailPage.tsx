@@ -8,7 +8,7 @@ import {
 
 import { useDashboardFilterOptions } from "@/src/hooks/useDashboardFilterOptions";
 import Page from "@/src/components/layouts/Page";
-import { NoDataOrLoading } from "@/src/components/NoDataOrLoading";
+import { Skeleton } from "@/src/components/ui/skeleton";
 import { TimeRangePicker } from "@/src/components/date-picker";
 import { PopoverFilterBuilder } from "@/src/features/filters/components/filter-builder";
 import { MultiSelect } from "@/src/features/filters/components/MultiSelect";
@@ -131,7 +131,9 @@ export default function DashboardDetailPage() {
           ],
         }}
       >
-        <NoDataOrLoading isLoading />
+        <div className="flex h-3/4 min-h-36 w-full items-center justify-center rounded-md">
+          <Skeleton className="h-full w-full" />
+        </div>
       </Page>
     );
   }
@@ -1488,7 +1490,9 @@ function DashboardDetailView({ readPath }: { readPath: ResolvedReadPath }) {
                     dashboardId={dashboardId}
                   />
                   {dashboard.isPending || !dashboardDefinition ? (
-                    <NoDataOrLoading isLoading={true} />
+                    <div className="flex h-3/4 min-h-36 w-full items-center justify-center rounded-md">
+                      <Skeleton className="h-full w-full" />
+                    </div>
                   ) : dashboard.isError ? (
                     <div className="flex h-64 items-center justify-center">
                       <div className="text-destructive">

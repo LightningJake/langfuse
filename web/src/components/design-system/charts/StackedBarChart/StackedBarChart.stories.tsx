@@ -28,6 +28,44 @@ const meta = preview.meta({
 
 export const Default = meta.story({});
 
+const dailyStacked = Array.from({ length: 13 }, (_, day) => ({
+  key: new Date(Date.UTC(2026, 7, 1 + day)).toISOString(),
+  values: { api: 40_000 + day * 1_200, worker: 65_000 + day * 800 },
+}));
+
+export const LastDateAtEdge = meta.story({
+  name: "(Test) Last Date Fully Visible",
+  args: {
+    data: dailyStacked,
+    tickFormatter: (key) => `Aug ${new Date(key).getUTCDate()}`,
+    legend: { visibility: "hidden" },
+  },
+  decorators: [
+    (Story) => (
+      <div className="bg-background h-[220px] w-[480px] overflow-hidden rounded-lg border p-4">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    await waitFor(() => {
+      expect(
+        canvasElement.querySelectorAll("[data-x-axis-label]").length,
+      ).toBeGreaterThan(0);
+    });
+    const svg = canvasElement.querySelector("svg");
+    if (!svg) throw new Error("Chart SVG not found");
+    const svgBox = svg.getBoundingClientRect();
+    const labels = svg.querySelectorAll("[data-x-axis-label]");
+    await expect(labels[labels.length - 1]?.textContent).toMatch(/Aug 1[13]/);
+    for (const label of labels) {
+      const box = label.getBoundingClientRect();
+      await expect(box.right).toBeLessThanOrEqual(svgBox.right + 1);
+      await expect(box.left).toBeGreaterThanOrEqual(svgBox.left - 1);
+    }
+  },
+});
+
 export const NoRoomForLabels = meta.story({
   name: "(Test) No Room For Labels",
   args: {
