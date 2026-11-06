@@ -34,6 +34,7 @@ import {
   ArrayJoinNode,
   ArrayIndexNode,
   FinalTableNode,
+  TupleSubcolumnNode,
   type ClickHouseSelectQueryNode,
   type LimitByNode,
 } from "./nodes";
@@ -239,9 +240,10 @@ export class ClickHouseQueryCompiler extends DefaultQueryCompiler {
 
   constructor() {
     super();
-    // ArrayIndexNode is a custom node kind Kysely's dispatch cannot reach and
-    // Kysely has no public hook to register one, so we patch its private
-    // visitNode/nodeStack to route the node to visitArrayIndex. Kysely is
+    // ArrayIndexNode, FinalTableNode and TupleSubcolumnNode are custom node
+    // kinds Kysely's dispatch cannot reach and Kysely has no public hook to
+    // register one, so we patch its private visitNode/nodeStack to route each
+    // to its visit method. Kysely is
     // pinned to 0.28.17 for this; see README.md ("upgrade hazard").
     const parentVisit = this.visitNode.bind(this);
     // Anti-pattern: cast through `unknown` once to reach Kysely's private
@@ -261,6 +263,12 @@ export class ClickHouseQueryCompiler extends DefaultQueryCompiler {
       if (FinalTableNode.is(node)) {
         self.nodeStack.push(node);
         this.visitFinalTable(node);
+        self.nodeStack.pop();
+        return;
+      }
+      if (TupleSubcolumnNode.is(node)) {
+        self.nodeStack.push(node);
+        this.visitTupleSubcolumn(node);
         self.nodeStack.pop();
         return;
       }
@@ -849,6 +857,12 @@ export class ClickHouseQueryCompiler extends DefaultQueryCompiler {
   private visitFinalTable(node: FinalTableNode): void {
     this.visitNode(node.table);
     this.append(" final");
+  }
+
+  private visitTupleSubcolumn(node: TupleSubcolumnNode): void {
+    this.visitNode(node.column);
+    this.append(".");
+    this.visitNode(node.field);
   }
 
   private bindValue(value: unknown, type?: OperandBindType): string {

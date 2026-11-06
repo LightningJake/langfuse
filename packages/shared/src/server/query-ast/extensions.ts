@@ -48,6 +48,7 @@ import {
   ArrayJoinNode,
   FinalTableNode,
   LimitByNode,
+  TupleSubcolumnNode,
   finalTable,
   type ArrayJoinVariant,
   type ClickHouseSelectQueryNode,
@@ -598,14 +599,10 @@ export function tupleArrayField<R, K extends keyof R & string>(
 ): ChExpression<Array<R[K]>> {
   const node = column.toOperationNode();
   assertQualifiedColumn(node, "tupleArrayField");
-  // `<qualifier>.<column>.<field>`, written as schema.table.column.
   return new ExpressionWrapper(
-    ReferenceNode.create(
-      ColumnNode.create(field),
-      TableNode.createWithSchema(
-        node.table.table.identifier.name,
-        node.column.column.name,
-      ),
+    TupleSubcolumnNode.create(
+      node,
+      IdentifierNode.create(field),
     ) as unknown as OperationNode,
   );
 }

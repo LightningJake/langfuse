@@ -5,6 +5,7 @@ import {
   TableNode,
   expressionBuilder,
   sql,
+  type Expression,
   type ExpressionBuilder,
 } from "kysely";
 import { describe, expect, expectTypeOf, it } from "vitest";
@@ -291,6 +292,46 @@ describe("tupleArrayField", () => {
     const { sql: compiled } = compileClickhouseQuery(qb, projectId);
     expect(compiled).toContain("e.skills_available.skillName as names");
     expect(compiled).toContain("from events_core as e");
+  });
+
+  it("reads its column: a truncated one routes the relation to events_full", () => {
+    // `input` is truncated on events_core; typed as Array(Tuple) to reach the helper.
+    const input = (
+      eb: ExpressionBuilder<{ e: ClickHouseDatabase["events"] }, "e">,
+    ) => eb.ref("e.input") as unknown as Expression<Array<{ name: string }>>;
+    const qb = getClickhouseKysely()
+      .selectFrom("events as e")
+      .select((eb) => [tupleArrayField(input(eb), "name").as("names")]);
+
+    const { sql: compiled } = compileClickhouseQuery(qb, projectId);
+    expect(compiled).toContain("e.input.name as names");
+    expect(compiled).toContain("from events_full as e");
+  });
+
+  it("is no project_id predicate for a relation named like its column", () => {
+    // `e.skills_available.project_id = <projectId>` must not count as scoping
+    // the relation aliased `skills_available`.
+    const qb = getClickhouseKysely()
+      .selectFrom("events as e")
+      .innerJoin(
+        "events as skills_available",
+        "skills_available.span_id",
+        "e.span_id",
+      )
+      .select("e.span_id")
+      .where((eb) =>
+        eb(
+          tupleArrayField(
+            eb.ref("e.skills_available"),
+            "project_id" as never,
+          ) as unknown as Expression<string>,
+          "=",
+          projectId,
+        ),
+      );
+
+    const { sql: compiled } = compileClickhouseQuery(qb, projectId);
+    expect(compiled).toMatch(/(?<!\.)\bskills_available\.project_id = \{/);
   });
 
   it.each([
